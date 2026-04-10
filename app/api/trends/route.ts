@@ -2,13 +2,28 @@ import { NextResponse } from 'next/server';
 import { callClaude } from '@/lib/anthropic';
 import { FALLBACK_TREND_DATA, FALLBACK_SHARE_OF_SEARCH, FALLBACK_NEWS } from '@/lib/trends';
 import { TrendsAnalysisResult } from '@/lib/types';
+import { saveAnalysis, getLatestAnalysis, isSupabaseConfigured } from '@/lib/supabase';
 
 export const maxDuration = 60;
 
+// GET — devuelve el último análisis guardado en Supabase
+export async function GET() {
+  if (!isSupabaseConfigured()) {
+    return NextResponse.json({ data: null, savedAt: null });
+  }
+  try {
+    const record = await getLatestAnalysis<TrendsAnalysisResult>('trends');
+    if (!record) return NextResponse.json({ data: null, savedAt: null });
+    return NextResponse.json({ data: record.data, savedAt: record.created_at });
+  } catch (e) {
+    console.error('Trends GET error:', e);
+    return NextResponse.json({ data: null, savedAt: null });
+  }
+}
+
+// POST — ejecuta análisis con Claude y guarda en Supabase
 export async function POST() {
   try {
-    // Use Claude to get current trends analysis (web_search mode)
-    // For Vercel compatibility we skip Playwright and use Claude's knowledge + web search
     const trendsPrompt = `Analiza las tendencias actuales de banca digital en Chile para el período reciente (últimos 30 días aproximadamente).
 
 Considera específicamente:
@@ -34,34 +49,21 @@ Devuelve ÚNICAMENTE un JSON válido con esta estructura (sin markdown):
     {"brand": "MACH", "share": 8, "trend": "stable"}
   ],
   "news": [
-    {
-      "title": "Título noticia 1",
-      "source": "Fuente",
-      "date": "2025-04-05",
-      "summary": "Resumen de la noticia relevante para banca digital Chile"
-    }
+    {"title": "Título noticia", "source": "Fuente", "date": "2025-04-05", "summary": "Resumen"}
   ],
   "opportunities": [
-    {
-      "title": "Oportunidad de producto 1",
-      "description": "Descripción detallada de la oportunidad",
-      "priority": "Alta",
-      "source": "Tendencia/Noticia que la origina"
-    }
+    {"title": "Oportunidad", "description": "Descripción", "priority": "Alta", "source": "Fuente"}
   ],
-  "summary": "Resumen ejecutivo de 2-3 párrafos sobre el estado del ecosistema digital bancario chileno"
+  "summary": "Resumen ejecutivo de 2-3 párrafos"
 }
 
-IMPORTANTE: Los datos de trendData deben usar valores del 0-100 (como Google Trends). Incluye al menos 3 noticias relevantes y 3 oportunidades de producto. Las oportunidades deben estar directamente relacionadas con los insights de tendencias y noticias.`;
+IMPORTANTE: trendData usa valores 0-100 (estilo Google Trends). Mínimo 3 noticias y 3 oportunidades.`;
 
     let claudeResult: Partial<TrendsAnalysisResult> = {};
-
     try {
       const claudeResponse = await callClaude(trendsPrompt, { maxTokens: 3000 });
       const jsonMatch = claudeResponse.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        claudeResult = JSON.parse(jsonMatch[0]);
-      }
+      if (jsonMatch) claudeResult = JSON.parse(jsonMatch[0]);
     } catch (e) {
       console.warn('Claude trends analysis failed:', e);
     }
@@ -85,14 +87,23 @@ IMPORTANTE: Los datos de trendData deben usar valores del 0-100 (como Google Tre
         },
         {
           title: 'Onboarding 100% digital sin sucursal',
-          description: 'Tenpo demuestra que el onboarding en <5 min es posible. BCI Pyme y Personas deben eliminar pasos presenciales para adquirir nuevos segmentos.',
+          description: 'Tenpo demuestra que el onboarding en <5 min es posible. BCI debe eliminar pasos presenciales para adquirir nuevos segmentos.',
           priority: 'Media',
           source: 'Ventaja competitiva Tenpo',
         },
       ],
-      summary: claudeResult.summary || 'El ecosistema bancario digital chileno está en plena transformación. Tenpo y MACH presionan con propuestas 100% digitales, mientras los bancos tradicionales luchan por mantener su base. BCI tiene una oportunidad única al combinar su escala con innovación digital.',
+      summary:
+        claudeResult.summary ||
+        'El ecosistema bancario digital chileno está en plena transformación. Tenpo y MACH presionan con propuestas 100% digitales, mientras los bancos tradicionales luchan por mantener su base. BCI tiene una oportunidad única al combinar su escala con innovación digital.',
       updatedAt: new Date().toISOString(),
     };
+
+    // Guardar en Supabase
+    if (isSupabaseConfigured()) {
+      saveAnalysis('trends', result).catch((e) =>
+        console.warn('Supabase save failed (trends):', e)
+      );
+    }
 
     return NextResponse.json(result);
   } catch (error) {
@@ -102,8 +113,4 @@ IMPORTANTE: Los datos de trendData deben usar valores del 0-100 (como Google Tre
       { status: 500 }
     );
   }
-}
-
-export async function GET() {
-  return NextResponse.json({ message: 'Use POST to trigger analysis' });
 }

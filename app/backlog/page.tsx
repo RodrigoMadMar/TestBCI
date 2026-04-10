@@ -1,7 +1,19 @@
 'use client';
 
-import { useState } from 'react';
-import { Sparkles, AlertCircle, LayoutGrid, Table2, Lightbulb } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import {
+  Sparkles,
+  AlertCircle,
+  LayoutGrid,
+  Table2,
+  Lightbulb,
+  Database,
+  CheckCircle2,
+  Clock,
+  Star,
+  TrendingUp,
+  XCircle,
+} from 'lucide-react';
 import { BacklogResult, BacklogItem, BacklogCategory, RiceLabel } from '@/lib/types';
 import KanbanBoard from '@/components/KanbanBoard';
 import { ExportCSVButton } from '@/components/ExportButton';
@@ -21,6 +33,36 @@ const SPRINT_COLORS: Record<RiceLabel, string> = {
   Later: 'text-gray-400',
 };
 
+interface Sources {
+  reviewsSavedAt: string | null;
+  trendsSavedAt: string | null;
+  hasBrief: boolean;
+}
+
+function SourceBadge({ date, icon: Icon, label }: { date: string; icon: React.ElementType; label: string }) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 bg-[#0A0A0F] border border-emerald-500/20 rounded-lg">
+      <CheckCircle2 size={12} className="text-emerald-400 flex-shrink-0" />
+      <Icon size={12} className="text-gray-400 flex-shrink-0" />
+      <span className="text-xs text-gray-300">{label}</span>
+      <span className="text-xs text-gray-600">·</span>
+      <Clock size={10} className="text-gray-600 flex-shrink-0" />
+      <span className="text-xs text-gray-600">
+        {new Date(date).toLocaleString('es-CL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+      </span>
+    </div>
+  );
+}
+
+function MissingSourceBadge({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 bg-[#0A0A0F] border border-[#1E1E2E] rounded-lg opacity-50">
+      <XCircle size={12} className="text-gray-600 flex-shrink-0" />
+      <span className="text-xs text-gray-500">{label} — sin escaneo</span>
+    </div>
+  );
+}
+
 function TableView({ items }: { items: BacklogItem[] }) {
   return (
     <div className="overflow-x-auto">
@@ -29,10 +71,7 @@ function TableView({ items }: { items: BacklogItem[] }) {
           <tr className="border-b border-[#1E1E2E]">
             {['Sprint', 'Título', 'Categoría', 'Reach', 'Impact', 'Conf%', 'Effort', 'Score', 'User Story'].map(
               (col) => (
-                <th
-                  key={col}
-                  className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider py-3 px-3"
-                >
+                <th key={col} className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider py-3 px-3">
                   {col}
                 </th>
               )
@@ -43,13 +82,8 @@ function TableView({ items }: { items: BacklogItem[] }) {
           {items
             .sort((a, b) => b.rice.score - a.rice.score)
             .map((item) => (
-              <tr
-                key={item.id}
-                className="border-b border-[#1E1E2E]/50 hover:bg-[#12121A] transition-colors"
-              >
-                <td className={`py-3 px-3 font-semibold text-xs ${SPRINT_COLORS[item.sprint]}`}>
-                  {item.sprint}
-                </td>
+              <tr key={item.id} className="border-b border-[#1E1E2E]/50 hover:bg-[#12121A] transition-colors">
+                <td className={`py-3 px-3 font-semibold text-xs ${SPRINT_COLORS[item.sprint]}`}>{item.sprint}</td>
                 <td className="py-3 px-3 text-white font-medium max-w-[180px]">
                   <span className="line-clamp-2">{item.title}</span>
                 </td>
@@ -62,9 +96,7 @@ function TableView({ items }: { items: BacklogItem[] }) {
                 <td className="py-3 px-3 text-center text-gray-300">{item.rice.impact}</td>
                 <td className="py-3 px-3 text-center text-gray-300">{item.rice.confidence}%</td>
                 <td className="py-3 px-3 text-center text-gray-300">{item.rice.effort}</td>
-                <td className="py-3 px-3 text-center font-bold text-[#4D8EFF]">
-                  {item.rice.score}
-                </td>
+                <td className="py-3 px-3 text-center font-bold text-[#4D8EFF]">{item.rice.score}</td>
                 <td className="py-3 px-3 text-gray-400 text-xs max-w-[300px]">
                   <span className="line-clamp-2">{item.userStory}</span>
                 </td>
@@ -78,34 +110,55 @@ function TableView({ items }: { items: BacklogItem[] }) {
 
 export default function BacklogPage() {
   const [result, setResult] = useState<BacklogResult | null>(null);
+  const [sources, setSources] = useState<Sources | null>(null);
+  const [availableSources, setAvailableSources] = useState<{
+    reviews: string | null;
+    trends: string | null;
+  }>({ reviews: null, trends: null });
   const [loading, setLoading] = useState(false);
+  const [loadingInitial, setLoadingInitial] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [brief, setBrief] = useState('');
   const [view, setView] = useState<'kanban' | 'table'>('kanban');
 
-  const generateBacklog = async (fromBrief = false) => {
+  // Cargar último backlog guardado + verificar qué escaneos hay disponibles
+  useEffect(() => {
+    Promise.all([
+      fetch('/api/backlog').then((r) => r.json()).catch(() => ({ data: null, savedAt: null })),
+      fetch('/api/reviews').then((r) => r.json()).catch(() => ({ data: null, savedAt: null })),
+      fetch('/api/trends').then((r) => r.json()).catch(() => ({ data: null, savedAt: null })),
+    ]).then(([backlog, reviews, trends]) => {
+      if (backlog.data) setResult(backlog.data);
+      setAvailableSources({
+        reviews: reviews.savedAt || null,
+        trends: trends.savedAt || null,
+      });
+    }).finally(() => setLoadingInitial(false));
+  }, []);
+
+  const generateBacklog = async () => {
     setLoading(true);
     setError(null);
     try {
       const res = await fetch('/api/backlog', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          brief: fromBrief ? brief : undefined,
-          reviewInsights: [],
-          trendsInsights: [],
-        }),
+        body: JSON.stringify({ brief: brief.trim() || undefined }),
       });
       if (!res.ok) throw new Error(`Error ${res.status}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      setResult(data);
+      const { sources: s, ...backlogResult } = data;
+      setResult(backlogResult);
+      setSources(s || null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido');
     } finally {
       setLoading(false);
     }
   };
+
+  const hasContext = availableSources.reviews || availableSources.trends;
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -114,7 +167,7 @@ export default function BacklogPage() {
         <div>
           <h1 className="text-2xl font-bold text-white">Backlog Priorizado</h1>
           <p className="text-gray-500 text-sm mt-0.5">
-            User stories con RICE score — vista Kanban y tabla exportable
+            User stories con RICE score — generado desde el último escaneo de Reviews y Trends
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -142,41 +195,70 @@ export default function BacklogPage() {
         </div>
       </div>
 
+      {/* Context sources panel */}
+      {!loadingInitial && (
+        <div className="bg-[#12121A] border border-[#1E1E2E] rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Database size={14} className="text-[#4D8EFF]" />
+            <h3 className="text-white text-sm font-medium">Contexto disponible en Supabase</h3>
+            {hasContext && (
+              <span className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                El backlog usará estos datos automáticamente
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {availableSources.reviews ? (
+              <SourceBadge date={availableSources.reviews} icon={Star} label="Reviews (BCI, Tenpo, Itaú)" />
+            ) : (
+              <MissingSourceBadge label="Reviews" />
+            )}
+            {availableSources.trends ? (
+              <SourceBadge date={availableSources.trends} icon={TrendingUp} label="Trends & Noticias" />
+            ) : (
+              <MissingSourceBadge label="Trends" />
+            )}
+          </div>
+          {!hasContext && (
+            <p className="text-xs text-gray-600 mt-2">
+              Ejecuta los módulos Feature Analyst y Trends Analyst para enriquecer el contexto del backlog.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Brief Input */}
       <div className="bg-[#12121A] border border-[#1E1E2E] rounded-xl p-5">
         <div className="flex items-start gap-2 mb-3">
           <Lightbulb size={16} className="text-amber-400 mt-0.5" />
           <div>
-            <h2 className="text-white text-sm font-medium">Brief de Producto (opcional)</h2>
+            <h2 className="text-white text-sm font-medium">Brief adicional (opcional)</h2>
             <p className="text-gray-500 text-xs">
-              Describe el foco del backlog o deja vacío para generar desde el contexto BCI general
+              Agrega foco específico. El backlog ya incorporará el contexto de reviews y trends automáticamente.
             </p>
           </div>
         </div>
         <textarea
           value={brief}
           onChange={(e) => setBrief(e.target.value)}
-          placeholder="Ej: Necesito mejorar el onboarding de la app BCI para usuarios jóvenes que migran desde Tenpo..."
+          placeholder="Ej: Foco en mejorar el onboarding para usuarios jóvenes que migran desde Tenpo..."
           className="w-full bg-[#0A0A0F] border border-[#1E1E2E] rounded-lg p-3 text-sm text-gray-300 placeholder-gray-600 resize-none focus:outline-none focus:border-[#0033A0] transition-colors"
-          rows={3}
+          rows={2}
         />
-        <div className="flex gap-3 mt-3">
+        <div className="flex items-center justify-between mt-3">
           <button
-            onClick={() => generateBacklog(true)}
-            disabled={loading || !brief.trim()}
+            onClick={generateBacklog}
+            disabled={loading || loadingInitial}
             className="flex items-center gap-2 px-4 py-2 bg-[#0033A0] hover:bg-[#0044CC] disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-all"
           >
-            <Sparkles size={14} />
-            {loading ? 'Generando...' : 'Generar desde Brief'}
+            <Sparkles size={14} className={loading ? 'animate-pulse' : ''} />
+            {loading ? 'Generando backlog...' : result ? 'Regenerar Backlog' : 'Generar Backlog'}
           </button>
-          <button
-            onClick={() => generateBacklog(false)}
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 border border-[#1E1E2E] hover:bg-[#1A1A2E] disabled:opacity-50 disabled:cursor-not-allowed text-gray-300 hover:text-white rounded-lg text-sm font-medium transition-all"
-          >
-            <Sparkles size={14} />
-            {loading ? 'Generando...' : 'Generar desde Insights BCI'}
-          </button>
+          {loading && (
+            <span className="text-xs text-gray-500">
+              Claude está analizando el contexto de {[availableSources.reviews && 'reviews', availableSources.trends && 'trends'].filter(Boolean).join(' y ')}...
+            </span>
+          )}
         </div>
       </div>
 
@@ -189,34 +271,47 @@ export default function BacklogPage() {
       )}
 
       {/* Loading */}
-      {loading && (
+      {(loading || (loadingInitial && !result)) && (
         <div className="space-y-4 animate-fade-in">
           <div className="grid grid-cols-3 gap-4">
-            <div className="space-y-3">
-              <CardSkeleton />
-              <CardSkeleton />
-              <CardSkeleton />
-            </div>
-            <div className="space-y-3">
-              <CardSkeleton />
-              <CardSkeleton />
-              <CardSkeleton />
-            </div>
-            <div className="space-y-3">
-              <CardSkeleton />
-              <CardSkeleton />
-              <CardSkeleton />
-            </div>
+            {[0, 1, 2].map((col) => (
+              <div key={col} className="space-y-3">
+                <CardSkeleton />
+                <CardSkeleton />
+                <CardSkeleton />
+              </div>
+            ))}
           </div>
         </div>
       )}
 
+      {/* Sources used */}
+      {sources && result && !loading && (
+        <div className="flex flex-wrap gap-2 items-center text-xs">
+          <span className="text-gray-500">Backlog generado con:</span>
+          {sources.reviewsSavedAt && (
+            <span className="text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+              ✓ Reviews del {new Date(sources.reviewsSavedAt).toLocaleDateString('es-CL')}
+            </span>
+          )}
+          {sources.trendsSavedAt && (
+            <span className="text-[#6366F1] bg-[#6366F1]/10 px-2 py-0.5 rounded-full border border-[#6366F1]/20">
+              ✓ Trends del {new Date(sources.trendsSavedAt).toLocaleDateString('es-CL')}
+            </span>
+          )}
+          {sources.hasBrief && (
+            <span className="text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
+              ✓ Brief personalizado
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Results */}
-      {result && !loading && (
+      {result && !loading && !loadingInitial && (
         <div className="space-y-4 animate-fade-in">
-          {/* Stats bar */}
           <div className="flex items-center gap-4 text-xs text-gray-500">
-            <span>{result.items.length} user stories generadas</span>
+            <span>{result.items.length} user stories</span>
             <span>·</span>
             <span className="text-emerald-400">{result.items.filter((i) => i.sprint === 'Now').length} Now</span>
             <span>·</span>
@@ -238,14 +333,16 @@ export default function BacklogPage() {
       )}
 
       {/* Empty state */}
-      {!result && !loading && !error && (
+      {!result && !loading && !loadingInitial && !error && (
         <div className="flex flex-col items-center justify-center py-24 text-center">
           <div className="w-16 h-16 rounded-2xl bg-[#059669]/20 flex items-center justify-center mb-4">
             <Sparkles size={28} className="text-[#059669]" />
           </div>
           <h3 className="text-white font-medium mb-2">Genera tu backlog priorizado</h3>
           <p className="text-gray-500 text-sm max-w-sm">
-            Escribe un brief o haz clic en &quot;Generar desde Insights BCI&quot; para crear user stories con priorización RICE automática.
+            {hasContext
+              ? 'Haz clic en "Generar Backlog" para crear user stories basadas en el contexto real de reviews y tendencias guardado en Supabase.'
+              : 'Primero ejecuta el Feature Analyst y el Trends Analyst para obtener contexto real. Luego genera el backlog.'}
           </p>
         </div>
       )}

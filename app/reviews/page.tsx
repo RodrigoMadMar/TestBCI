@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { RefreshCw, AlertCircle, Info } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { RefreshCw, AlertCircle, Info, Database, Clock } from 'lucide-react';
 import { ReviewsAnalysisResult, AppAnalysis } from '@/lib/types';
 import ReviewCard from '@/components/ReviewCard';
 import { CardSkeleton } from '@/components/LoadingSkeleton';
@@ -82,11 +82,43 @@ function CategoryHeatmap({ apps }: { apps: AppAnalysis[] }) {
   );
 }
 
+function SavedBadge({ savedAt }: { savedAt: string }) {
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+      <Database size={11} />
+      <span>Guardado en Supabase</span>
+      <span className="text-gray-600">·</span>
+      <Clock size={11} className="text-gray-500" />
+      <span className="text-gray-500">
+        {new Date(savedAt).toLocaleString('es-CL', {
+          day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+        })}
+      </span>
+    </div>
+  );
+}
+
 export default function ReviewsPage() {
   const [result, setResult] = useState<ReviewsAnalysisResult | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingInitial, setLoadingInitial] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [usingFallback, setUsingFallback] = useState(false);
+
+  // Cargar último análisis guardado al montar
+  useEffect(() => {
+    fetch('/api/reviews')
+      .then((r) => r.json())
+      .then(({ data, savedAt: sa }) => {
+        if (data) {
+          setResult(data);
+          setSavedAt(sa);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoadingInitial(false));
+  }, []);
 
   const runAnalysis = async () => {
     setLoading(true);
@@ -97,6 +129,7 @@ export default function ReviewsPage() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setResult(data);
+      setSavedAt(new Date().toISOString());
       setUsingFallback(data.usingFallback || false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido');
@@ -116,6 +149,8 @@ export default function ReviewsPage() {
     return max || 1;
   };
 
+  const isLoading = loading || loadingInitial;
+
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
       {/* Header */}
@@ -128,13 +163,16 @@ export default function ReviewsPage() {
         </div>
         <button
           onClick={runAnalysis}
-          disabled={loading}
+          disabled={isLoading}
           className="flex items-center gap-2 px-4 py-2 bg-[#0033A0] hover:bg-[#0044CC] disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-all"
         >
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           {loading ? 'Analizando...' : result ? 'Actualizar Análisis' : 'Ejecutar Análisis'}
         </button>
       </div>
+
+      {/* Saved badge */}
+      {savedAt && !loading && <SavedBadge savedAt={savedAt} />}
 
       {/* Fallback notice */}
       {usingFallback && (
@@ -155,7 +193,7 @@ export default function ReviewsPage() {
       )}
 
       {/* Loading skeletons */}
-      {loading && (
+      {isLoading && !result && (
         <div className="space-y-6 animate-fade-in">
           <div className="grid grid-cols-3 gap-4">
             <CardSkeleton />
@@ -171,28 +209,19 @@ export default function ReviewsPage() {
       )}
 
       {/* Results */}
-      {result && !loading && (
+      {result && !isLoading && (
         <div className="space-y-6 animate-fade-in">
-          {/* App Cards */}
           <div className="grid grid-cols-3 gap-4">
             {result.apps.map((app) => (
-              <ReviewCard
-                key={app.appId}
-                analysis={app}
-                maxCount={getMaxCategoryCount()}
-              />
+              <ReviewCard key={app.appId} analysis={app} maxCount={getMaxCategoryCount()} />
             ))}
           </div>
 
-          {/* Category Heatmap */}
           <div className="bg-[#12121A] border border-[#1E1E2E] rounded-xl p-5">
-            <h2 className="text-white font-semibold mb-4 text-sm">
-              Mapa de Incidencias por Categoría
-            </h2>
+            <h2 className="text-white font-semibold mb-4 text-sm">Mapa de Incidencias por Categoría</h2>
             <CategoryHeatmap apps={result.apps} />
           </div>
 
-          {/* Comparative Insights */}
           <div className="bg-[#12121A] border border-[#1E1E2E] rounded-xl p-5">
             <h2 className="text-white font-semibold mb-4 text-sm flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-[#4D8EFF] inline-block" />
@@ -210,16 +239,14 @@ export default function ReviewsPage() {
             </ul>
           </div>
 
-          {/* Updated at */}
           <p className="text-xs text-gray-600 text-right">
-            Última actualización:{' '}
-            {new Date(result.updatedAt).toLocaleString('es-CL')}
+            Análisis ejecutado: {new Date(result.updatedAt).toLocaleString('es-CL')}
           </p>
         </div>
       )}
 
       {/* Empty state */}
-      {!result && !loading && !error && (
+      {!result && !isLoading && !error && (
         <div className="flex flex-col items-center justify-center py-24 text-center">
           <div className="w-16 h-16 rounded-2xl bg-[#0033A0]/20 flex items-center justify-center mb-4">
             <RefreshCw size={28} className="text-[#4D8EFF]" />

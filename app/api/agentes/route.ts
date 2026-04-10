@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { callClaudeStream } from '@/lib/anthropic';
 import { AgenticFlowInput, AgenticFlowResult } from '@/lib/types';
+import { saveAnalysis, isSupabaseConfigured } from '@/lib/supabase';
 
 export const maxDuration = 60;
 
@@ -150,6 +151,13 @@ REGLAS DE NEGOCIO:
         implementationSize: 'M',
         implementationJustification: 'Complejidad media, requiere integración con sistemas bancarios existentes.',
       };
+    }
+
+    // Guardar en Supabase
+    if (isSupabaseConfigured()) {
+      saveAnalysis('agentes', result).catch((e) =>
+        console.warn('Supabase save failed (agentes):', e)
+      );
     }
 
     return NextResponse.json(result);
