@@ -67,7 +67,7 @@ export default function TrendsPage() {
   const [loadingInitial, setLoadingInitial] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Cargar último análisis guardado al montar
+  // Cargar último análisis: Supabase → localStorage → nada
   useEffect(() => {
     fetch('/api/trends')
       .then((r) => r.json())
@@ -75,7 +75,17 @@ export default function TrendsPage() {
         if (data) {
           setResult(data);
           setSavedAt(sa);
+          return;
         }
+        // Fallback: localStorage
+        try {
+          const stored = localStorage.getItem('bci_trends');
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            setResult(parsed.data);
+            setSavedAt(parsed.savedAt);
+          }
+        } catch {}
       })
       .catch(() => {})
       .finally(() => setLoadingInitial(false));
@@ -89,8 +99,13 @@ export default function TrendsPage() {
       if (!res.ok) throw new Error(`Error ${res.status}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      const now = new Date().toISOString();
       setResult(data);
-      setSavedAt(new Date().toISOString());
+      setSavedAt(now);
+      // Guardar en localStorage como fallback cuando Supabase no está configurado
+      try {
+        localStorage.setItem('bci_trends', JSON.stringify({ data, savedAt: now }));
+      } catch {}
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido');
     } finally {

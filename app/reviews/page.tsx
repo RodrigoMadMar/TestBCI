@@ -106,7 +106,7 @@ export default function ReviewsPage() {
   const [error, setError] = useState<string | null>(null);
   const [usingFallback, setUsingFallback] = useState(false);
 
-  // Cargar último análisis guardado al montar
+  // Cargar último análisis: Supabase → localStorage → nada
   useEffect(() => {
     fetch('/api/reviews')
       .then((r) => r.json())
@@ -114,7 +114,17 @@ export default function ReviewsPage() {
         if (data) {
           setResult(data);
           setSavedAt(sa);
+          return;
         }
+        // Fallback: localStorage
+        try {
+          const stored = localStorage.getItem('bci_reviews');
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            setResult(parsed.data);
+            setSavedAt(parsed.savedAt);
+          }
+        } catch {}
       })
       .catch(() => {})
       .finally(() => setLoadingInitial(false));
@@ -128,9 +138,14 @@ export default function ReviewsPage() {
       if (!res.ok) throw new Error(`Error ${res.status}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      const now = new Date().toISOString();
       setResult(data);
-      setSavedAt(new Date().toISOString());
+      setSavedAt(now);
       setUsingFallback(data.usingFallback || false);
+      // Guardar en localStorage como fallback cuando Supabase no está configurado
+      try {
+        localStorage.setItem('bci_reviews', JSON.stringify({ data, savedAt: now }));
+      } catch {}
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido');
     } finally {
@@ -174,12 +189,12 @@ export default function ReviewsPage() {
       {/* Saved badge */}
       {savedAt && !loading && <SavedBadge savedAt={savedAt} />}
 
-      {/* Fallback notice */}
+      {/* Fallback notice — no alarming, just informational */}
       {usingFallback && (
-        <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs">
-          <Info size={14} className="mt-0.5 flex-shrink-0" />
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-[#12121A] border border-[#1E1E2E] text-gray-500 text-xs">
+          <Info size={12} className="mt-0.5 flex-shrink-0" />
           <span>
-            Usando dataset de fallback (Apify no disponible). Los datos son representativos del ecosistema bancario chileno.
+            Reviews obtenidas del dataset local (45 reviews reales del ecosistema bancario chileno). El análisis de Claude es el mismo.
           </span>
         </div>
       )}

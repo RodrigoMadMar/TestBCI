@@ -13,6 +13,9 @@ export const maxDuration = 60;
 
 interface BacklogRequest {
   brief?: string;
+  // El cliente puede enviar datos directamente cuando Supabase no está configurado
+  reviewsData?: ReviewsAnalysisResult;
+  trendsData?: TrendsAnalysisResult;
 }
 
 function calculateRiceScore(reach: number, impact: number, confidence: number, effort: number): number {
@@ -34,48 +37,51 @@ export async function GET() {
   }
 }
 
-// POST — genera backlog con contexto del último escaneo de reviews y trends
+// POST — genera backlog con contexto del último escaneo (Supabase o datos del cliente)
 export async function POST(request: Request) {
   try {
     const body: BacklogRequest = await request.json();
-    const { brief } = body;
+    const { brief, reviewsData: clientReviews, trendsData: clientTrends } = body;
 
-    // ── Cargar último análisis de reviews y trends desde Supabase ──────────
+    // ── Obtener contexto de reviews ──────────────────────────────────────────
     let reviewsContext = '';
-    let trendsContext = '';
     let reviewsSavedAt: string | null = null;
+
+    if (isSupabaseConfigured()) {
+      const record = await getLatestAnalysis<ReviewsAnalysisResult>('reviews');
+      if (record) {
+        reviewsContext = extractReviewsContext(record.data);
+        reviewsSavedAt = record.created_at;
+      }
+    }
+    // Fallback: usar datos enviados por el cliente (desde localStorage)
+    if (!reviewsContext && clientReviews) {
+      reviewsContext = extractReviewsContext(clientReviews);
+      reviewsSavedAt = clientReviews.updatedAt;
+    }
+
+    // ── Obtener contexto de trends ───────────────────────────────────────────
+    let trendsContext = '';
     let trendsSavedAt: string | null = null;
 
     if (isSupabaseConfigured()) {
-      const [reviewsRecord, trendsRecord] = await Promise.all([
-        getLatestAnalysis<ReviewsAnalysisResult>('reviews'),
-        getLatestAnalysis<TrendsAnalysisResult>('trends'),
-      ]);
-
-      if (reviewsRecord) {
-        reviewsContext = extractReviewsContext(reviewsRecord.data);
-        reviewsSavedAt = reviewsRecord.created_at;
+      const record = await getLatestAnalysis<TrendsAnalysisResult>('trends');
+      if (record) {
+        trendsContext = extractTrendsContext(record.data);
+        trendsSavedAt = record.created_at;
       }
-      if (trendsRecord) {
-        trendsContext = extractTrendsContext(trendsRecord.data);
-        trendsSavedAt = trendsRecord.created_at;
-      }
+    }
+    // Fallback: usar datos enviados por el cliente (desde localStorage)
+    if (!trendsContext && clientTrends) {
+      trendsContext = extractTrendsContext(clientTrends);
+      trendsSavedAt = clientTrends.updatedAt;
     }
 
     // ── Construir el contexto completo para Claude ──────────────────────────
     const sections: string[] = [];
-
-    if (brief?.trim()) {
-      sections.push(`BRIEF DEL PRODUCT OWNER:\n${brief.trim()}`);
-    }
-
-    if (reviewsContext) {
-      sections.push(reviewsContext);
-    }
-
-    if (trendsContext) {
-      sections.push(trendsContext);
-    }
+    if (brief?.trim()) sections.push(`BRIEF DEL PRODUCT OWNER:\n${brief.trim()}`);
+    if (reviewsContext) sections.push(reviewsContext);
+    if (trendsContext) sections.push(trendsContext);
 
     const contextSection =
       sections.length > 0
@@ -99,9 +105,9 @@ Devuelve ÚNICAMENTE un JSON válido con esta estructura (sin markdown):
       "userStory": "Como [tipo de usuario], quiero [acción específica], para [beneficio concreto]",
       "category": "UX",
       "acceptanceCriteria": [
-        {"id": "ac-1-1", "description": "Criterio medible y específico 1"},
-        {"id": "ac-1-2", "description": "Criterio medible y específico 2"},
-        {"id": "ac-1-3", "description": "Criterio medible y específico 3"}
+        {"id": "ac-1-1", "description": "Criterio medible 1"},
+        {"id": "ac-1-2", "description": "Criterio medible 2"},
+        {"id": "ac-1-3", "description": "Criterio medible 3"}
       ],
       "rice": {
         "reach": 8,
@@ -118,13 +124,12 @@ Devuelve ÚNICAMENTE un JSON válido con esta estructura (sin markdown):
 REGLAS:
 - category: exactamente "UX", "Funcionalidad", "Estabilidad", "Growth" o "Compliance"
 - sprint: exactamente "Now", "Next" o "Later"
-- rice.reach: 1-10 | rice.impact: 1-10 | rice.confidence: 0-100 | rice.effort: 1-10
 - rice.score = (reach × impact × confidence) / effort
-- Now: mayor prioridad (score alto + impacto urgente en estabilidad o retención)
-- Next: prioridad media (impacto alto pero mayor esfuerzo o menor urgencia)
-- Later: estratégico (growth, compliance, features diferenciadores)
-- Mínimo 1 story de Compliance (Open Finance/CMF) y 2 de UX basadas en problemas reales
-- Los criterios de aceptación deben ser medibles (ej: tiempo, %, número)`;
+- Now: mayor prioridad (urgente, alto impacto en retención o estabilidad)
+- Next: prioridad media (impacto alto, mayor esfuerzo)
+- Later: estratégico (growth, compliance, diferenciadores)
+- Mínimo 1 story de Compliance y 2 de UX basadas en problemas reales
+- Criterios de aceptación medibles (tiempos, porcentajes, números)`;
 
     const claudeResponse = await callClaude(prompt, { maxTokens: 4000 });
 
@@ -133,17 +138,11 @@ REGLAS:
       const jsonMatch = claudeResponse.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error('No JSON found');
       parsed = JSON.parse(jsonMatch[0]);
-
       parsed.items = parsed.items.map((item) => ({
         ...item,
         rice: {
           ...item.rice,
-          score: calculateRiceScore(
-            item.rice.reach,
-            item.rice.impact,
-            item.rice.confidence,
-            item.rice.effort
-          ),
+          score: calculateRiceScore(item.rice.reach, item.rice.impact, item.rice.confidence, item.rice.effort),
         },
       }));
     } catch (e) {
@@ -153,13 +152,12 @@ REGLAS:
           {
             id: 'story-fallback-1',
             title: 'Corregir botones no responsivos post-actualización',
-            userStory:
-              'Como cliente de BCI, quiero que los botones de la app funcionen correctamente después de actualizar, para poder realizar mis operaciones bancarias sin interrupciones.',
+            userStory: 'Como cliente de BCI, quiero que los botones funcionen correctamente tras actualizar, para realizar operaciones sin interrupciones.',
             category: 'Estabilidad',
             acceptanceCriteria: [
-              { id: 'ac-f-1', description: 'Todos los botones responden al primer toque en <200ms' },
-              { id: 'ac-f-2', description: 'La app no se congela durante 60 segundos de uso continuo' },
-              { id: 'ac-f-3', description: 'Crash rate menor al 0.5% en Google Play Console' },
+              { id: 'ac-f-1', description: 'Todos los botones responden en <200ms' },
+              { id: 'ac-f-2', description: 'La app no se congela en 60s de uso continuo' },
+              { id: 'ac-f-3', description: 'Crash rate < 0.5% en Google Play Console' },
             ],
             rice: { reach: 9, impact: 10, confidence: 95, effort: 4, score: 214 },
             sprint: 'Now',
@@ -173,11 +171,8 @@ REGLAS:
       generatedAt: new Date().toISOString(),
     };
 
-    // Guardar en Supabase
     if (isSupabaseConfigured()) {
-      saveAnalysis('backlog', result).catch((e) =>
-        console.warn('Supabase save failed (backlog):', e)
-      );
+      saveAnalysis('backlog', result).catch((e) => console.warn('Supabase save failed (backlog):', e));
     }
 
     return NextResponse.json({

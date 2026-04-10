@@ -13,17 +13,27 @@ export async function fetchReviewsFromApify(): Promise<Review[]> {
   const token = process.env.APIFY_TOKEN;
   if (!token) throw new Error('APIFY_TOKEN not set');
 
-  // Get run details to find defaultDatasetId
-  const runRes = await fetch(`${RUN_URL}?token=${token}`, {
-    headers: { 'Content-Type': 'application/json' },
-    next: { revalidate: 0 },
-  });
+  // Fetch run details with timeout
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
 
-  if (!runRes.ok) throw new Error(`Apify run fetch failed: ${runRes.status}`);
+  let runData: { data?: { defaultDatasetId?: string; status?: string } };
+  try {
+    const runRes = await fetch(`${RUN_URL}?token=${token}`, {
+      headers: { 'Content-Type': 'application/json' },
+      next: { revalidate: 0 },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!runRes.ok) throw new Error(`Apify run fetch failed: ${runRes.status}`);
+    runData = await runRes.json();
+  } catch (e) {
+    clearTimeout(timeout);
+    throw new Error(`Apify run unreachable: ${e instanceof Error ? e.message : e}`);
+  }
 
-  const runData = await runRes.json();
   const datasetId = runData?.data?.defaultDatasetId;
-  if (!datasetId) throw new Error('No defaultDatasetId in Apify run');
+  if (!datasetId) throw new Error('No defaultDatasetId in Apify run response');
 
   // Fetch dataset items
   const itemsRes = await fetch(

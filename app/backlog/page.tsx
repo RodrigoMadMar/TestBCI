@@ -14,7 +14,7 @@ import {
   TrendingUp,
   XCircle,
 } from 'lucide-react';
-import { BacklogResult, BacklogItem, BacklogCategory, RiceLabel } from '@/lib/types';
+import { BacklogResult, BacklogItem, BacklogCategory, RiceLabel, ReviewsAnalysisResult, TrendsAnalysisResult } from '@/lib/types';
 import KanbanBoard from '@/components/KanbanBoard';
 import { ExportCSVButton } from '@/components/ExportButton';
 import { CardSkeleton } from '@/components/LoadingSkeleton';
@@ -115,24 +115,50 @@ export default function BacklogPage() {
     reviews: string | null;
     trends: string | null;
   }>({ reviews: null, trends: null });
+  // Datos completos de análisis para pasar al API cuando Supabase no está disponible
+  const [cachedReviews, setCachedReviews] = useState<ReviewsAnalysisResult | null>(null);
+  const [cachedTrends, setCachedTrendsData] = useState<TrendsAnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingInitial, setLoadingInitial] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [brief, setBrief] = useState('');
   const [view, setView] = useState<'kanban' | 'table'>('kanban');
 
-  // Cargar último backlog guardado + verificar qué escaneos hay disponibles
+  // Carga: Supabase (via API) → localStorage → nada
   useEffect(() => {
+    const getFromLocalStorage = (key: string) => {
+      try {
+        const stored = localStorage.getItem(key);
+        return stored ? JSON.parse(stored) : null;
+      } catch {
+        return null;
+      }
+    };
+
     Promise.all([
-      fetch('/api/backlog').then((r) => r.json()).catch(() => ({ data: null, savedAt: null })),
+      fetch('/api/backlog').then((r) => r.json()).catch(() => ({ data: null })),
       fetch('/api/reviews').then((r) => r.json()).catch(() => ({ data: null, savedAt: null })),
       fetch('/api/trends').then((r) => r.json()).catch(() => ({ data: null, savedAt: null })),
-    ]).then(([backlog, reviews, trends]) => {
+    ]).then(([backlog, reviewsApi, trendsApi]) => {
       if (backlog.data) setResult(backlog.data);
-      setAvailableSources({
-        reviews: reviews.savedAt || null,
-        trends: trends.savedAt || null,
-      });
+
+      // Reviews: Supabase o localStorage
+      const reviewsSrc = (reviewsApi.data && reviewsApi.savedAt)
+        ? reviewsApi
+        : getFromLocalStorage('bci_reviews');
+      if (reviewsSrc?.data) {
+        setAvailableSources((prev) => ({ ...prev, reviews: reviewsSrc.savedAt }));
+        setCachedReviews(reviewsSrc.data);
+      }
+
+      // Trends: Supabase o localStorage
+      const trendsSrc = (trendsApi.data && trendsApi.savedAt)
+        ? trendsApi
+        : getFromLocalStorage('bci_trends');
+      if (trendsSrc?.data) {
+        setAvailableSources((prev) => ({ ...prev, trends: trendsSrc.savedAt }));
+        setCachedTrendsData(trendsSrc.data);
+      }
     }).finally(() => setLoadingInitial(false));
   }, []);
 
@@ -143,7 +169,12 @@ export default function BacklogPage() {
       const res = await fetch('/api/backlog', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brief: brief.trim() || undefined }),
+        body: JSON.stringify({
+          brief: brief.trim() || undefined,
+          // Enviar datos directamente cuando Supabase no está configurado
+          reviewsData: cachedReviews ?? undefined,
+          trendsData: cachedTrends ?? undefined,
+        }),
       });
       if (!res.ok) throw new Error(`Error ${res.status}`);
       const data = await res.json();
