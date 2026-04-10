@@ -3,6 +3,8 @@ import { callClaude } from '@/lib/anthropic';
 import { FALLBACK_TREND_DATA, FALLBACK_SHARE_OF_SEARCH, FALLBACK_NEWS } from '@/lib/trends';
 import { TrendsAnalysisResult } from '@/lib/types';
 
+export const maxDuration = 60;
+
 export async function POST() {
   try {
     // Use Claude to get current trends analysis (web_search mode)

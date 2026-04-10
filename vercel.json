@@ -1,16 +1,3 @@
 {
-  "functions": {
-    "app/api/reviews/route.ts": {
-      "maxDuration": 60
-    },
-    "app/api/trends/route.ts": {
-      "maxDuration": 60
-    },
-    "app/api/backlog/route.ts": {
-      "maxDuration": 60
-    },
-    "app/api/agentes/route.ts": {
-      "maxDuration": 60
-    }
-  }
+  "framework": "nextjs"
 }

@@ -3,6 +3,8 @@ import { callClaude } from '@/lib/anthropic';
 import { fetchReviewsFromApify, FALLBACK_REVIEWS } from '@/lib/apify';
 import { Review, AppAnalysis, ReviewsAnalysisResult, HealthStatus, AppId } from '@/lib/types';
 
+export const maxDuration = 60;
+
 const CATEGORIES = [
   'Estabilidad/Crashes',
   'UX/Navegación',

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { callClaude } from '@/lib/anthropic';
 import { BacklogResult, BacklogItem } from '@/lib/types';
 
+export const maxDuration = 60;
+
 interface BacklogRequest {
   brief?: string;
   reviewInsights?: string[];

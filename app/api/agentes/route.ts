@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { callClaudeStream } from '@/lib/anthropic';
 import { AgenticFlowInput, AgenticFlowResult } from '@/lib/types';
 
+export const maxDuration = 60;
+
 export async function POST(request: Request) {
   try {
     const body: AgenticFlowInput = await request.json();
